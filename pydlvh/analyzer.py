@@ -331,6 +331,7 @@ def get_all_cohort_histograms(
     """ Return an array containing all the DVH/LVH/DLVHs from cohort after standardizing binning. """
 
     dlvhs = normalize_to_list(dlvhs)
+
     quantity = quantity or "dlvh" # default quantity: dlvh
     if quantity not in ["dvh", "lvh", "dlvh"]:
         raise ValueError(f"Unrecognized {quantity}. Please select 'dvh', 'lvh', or 'dlvh'.")

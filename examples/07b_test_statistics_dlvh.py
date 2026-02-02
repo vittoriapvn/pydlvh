@@ -18,7 +18,7 @@ import pydlvh.analyzer as analyzer
 
 def create_synthetic_patient(n_voxels=4000,
                              mu_dose=30.0, sigma_dose=7.0,
-                             mu_let=30.0, sigma_let=10.0,
+                             mu_let=30.0, sigma_let=1.0,
                              volume_rng=(80.0, 120.0)):
     """
         Create synthetic dose, let and relative volumes distributions.
@@ -36,6 +36,7 @@ def create_synthetic_patient(n_voxels=4000,
     relative_volumes = relative_volumes / relative_volumes.sum()
 
     volume_cc = np.random.uniform(*volume_rng)
+    
     return DLVH(dose=dose, let=let, volume_cc=volume_cc, relative_volumes=relative_volumes)
 
 def main():
@@ -45,13 +46,13 @@ def main():
     mu_dose_control, sigma_dose_control = 60.0, 5.0
     dose_shapes = [(x, np.abs(y)) for x, y in zip(np.random.normal(loc=mu_dose_control, scale=3.0, size=10), np.random.normal(loc=sigma_dose_control, scale=1.0, size=100))]
     control_dlvhs = [create_synthetic_patient(mu_dose=mu, sigma_dose=sd) for (mu, sd) in dose_shapes] # Control group
-    mu_dose_ae, sigma_dose_ae = 50.0, 5.0
+    mu_dose_ae, sigma_dose_ae = 50.0, 5.0 
     dose_shapes = [(x, np.abs(y)) for x, y in zip(np.random.normal(loc=mu_dose_ae, scale=3.0, size=10), np.random.normal(loc=sigma_dose_ae, scale=1.0, size=100))]
     ae_dlvhs = [create_synthetic_patient(mu_dose=mu, sigma_dose=sd) for (mu, sd) in dose_shapes] # Adverse event (AE) group
 
     # 2) Median DLVHs
     # Set manual uniform dose+let binning for aggregation
-    dose_edges = np.arange(0., 71, 1)  # D in [0, 70] with step 1 Gy
+    dose_edges = np.arange(0., 96, 1)  # D in [0, 95] with step 1 Gy
     let_edges = np.arange(0., 51, 1)  # LET in [0, 50] with step 1 keV/um
     print("\nAggregating control DLVHs...")
     all_control_dlvhs, median_control_dlvh = analyzer.aggregate(dlvhs=control_dlvhs,
@@ -100,7 +101,7 @@ def main():
     ax[1].set_title("Median AE DLVH")
     plt.tight_layout()
     plt.show()
-    
+
     # 5) Compute AUC map between control and AE DLVHs    
     print("\nComputing ROC-AUC score...")
     auc_map = analyzer.get_auc_score(control_histograms=all_control_dlvhs,

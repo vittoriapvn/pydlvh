@@ -626,7 +626,7 @@ class DLVH:
         if dose_edges is not None:
             d_edges = np.asarray(dose_edges, dtype=float)
         elif bin_width_dose is None:
-            d_edges = _auto_bins(arr=self.dose)
+            d_edges = _auto_bins(array=self.dose)
         else:
             dmax = float(np.max(self.dose))
             nd = int(np.ceil(dmax / bin_width_dose))
@@ -636,21 +636,23 @@ class DLVH:
         if let_edges is not None:
             l_edges = np.asarray(let_edges, dtype=float)
         elif bin_width_let is None:
-            l_edges = _auto_bins(arr=self.let)
+            l_edges = _auto_bins(array=self.let)
         else:
             lmax = float(np.max(self.let))
             nl = int(np.ceil(lmax / bin_width_let))
             l_edges = np.linspace(0.0, nl * bin_width_let, nl + 1)
 
         weights = self.relw * self.volume_cc
+
         vols, d_edges, l_edges = np.histogram2d(self.dose, self.let,
                                                 bins=(d_edges, l_edges),
                                                 weights=weights)
 
         values = _suffix_cumsum2d(vols) if cumulative else vols.astype(float)
+
         if normalize:
             values = (values / self.volume_cc) * 100.0
-
+            
         return Histogram2D(values=values,
                            dose_edges=d_edges,
                            let_edges=l_edges,
