@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import numpy as np
 import warnings
+from matplotlib import gridspec
 import matplotlib.pyplot as plt
+from scipy.interpolate import interp1d
 from matplotlib.widgets import Slider
 from matplotlib.colors import ListedColormap
 from typing import Tuple, List, Literal, Optional, Union
-from .utils import _auto_bins, _suffix_cumsum2d, _get_bin_edges, _get_bin_centers
+from .utils import _auto_bins, _suffix_cumsum2d, _get_bin_edges, _get_bin_centers, project_contours_to_DVH, project_contours_to_LVH
 
 
 class Histogram1D:
@@ -230,8 +232,12 @@ class Histogram2D:
              cmap: str = None, colorbar: bool = True,
              mode: Literal["values", "err", "p_lo", "p_hi"] = "values",
              isovolumes: Optional[List[float]] = None,
-             isovolumes_colors: Optional[Union[str, List[str]]] = None,
              interactive: bool = False, title: bool = False,
+             isovolumes_colors: Optional[Union[str, List[str]]] = None,
+             isovolumes_linestyles: Optional[Union[str, List[str]]] = None,
+             isovolumes_positions: Optional[List] = None,
+             isovolumes_linewidth: Optional[Union[float, List[float]]] = None,
+             return_contours: Optional[bool] = False,
              auc_map: bool = False, **kwargs):
 
         data, dose_edges_plot, let_edges_plot = self._get_plot_data_and_edges(mode=mode)
@@ -287,10 +293,11 @@ class Histogram2D:
                 data,
                 levels=levels_abs,
                 colors=isovolumes_colors if isovolumes_colors else "black",
-                linewidths=1,
+                linestyles=isovolumes_linestyles if isovolumes_linestyles else "solid",
+                linewidths=isovolumes_linewidth if isovolumes_linewidth else 1
         )
             fmt = (lambda v: f"{v:g}%") if self.normalize else (lambda v: f"{v:.2f}cm³")
-            ax.clabel(CS, inline=True, fontsize=10, fmt=fmt)
+            ax.clabel(CS, inline=True, fontsize=10, fmt=fmt, manual=isovolumes_positions)
 
         # Interactive slider for isovolume
         if interactive:
@@ -353,7 +360,8 @@ class Histogram2D:
             self._slider.on_changed(_update)
 
         if not ax: plt.show()
-        return ax
+        if return_contours: return ax, CS
+        else: return ax
 
     def get_marginals(self, *, quantity: Literal["dose", "let"] = "dose") -> Tuple[np.ndarray, np.ndarray]:
         """Return the marginal histogram as (edges, values). Only for cumulative 2D."""
@@ -401,6 +409,78 @@ class Histogram2D:
         plt.tight_layout()
         return ax
 
+    def plot_with_projections(self, *, ax: Optional[plt.Axes] = None,
+                              isovolumes: Optional[List[float]] = None,
+                              isovolumes_colors: Optional[Union[str, List[str]]] = None,
+                              **kwargs):
+        
+        white_cmap = ListedColormap(["white"])
+
+        if ax is None:
+            fig, ax = plt.subplots(figsize=(7, 7), constrained_layout=False)
+        else:
+            fig = ax.figure
+
+        gs = gridspec.GridSpec(2, 2, height_ratios=[3,1], width_ratios=[1,3], hspace=0.05, wspace=0.05, left=0.1, right=0.8)
+        axr = fig.add_subplot(gs[0,1])
+
+        # DVLH plot
+        _, CS = self.plot(self, ax=axr, isovolumes=isovolumes, colorbar=False, cmap=white_cmap,
+                          isovolumes_colors=isovolumes_colors, return_contours=True)
+        
+        axr.tick_params(length=0) 
+        axr.set_xticklabels([])
+        axr.set_yticklabels([])
+
+        # DVH plot
+        axb = fig.add_subplot(gs[1,1])
+        dose_edges, dose_values = self.get_marginals(self, quantity="dose")
+        axb.step(dose_edges, dose_values, where="post", color="black", ls="-", lw=1)
+        axb.tick_params(axis="y", direction='in', length=0)
+        axb.tick_params(axis="x", direction='in', length=0)
+        axb.yaxis.set_major_locator(plt.MultipleLocator(50))
+        axb.set_xlabel("Dose [Gy(RBE)]")
+        axb.grid(alpha=0.5, linestyle='-')
+        pos_ax = ax.get_position()
+        pos_axb = axb.get_position()
+        axb.set_position([pos_ax.x0, pos_axb.y0, pos_ax.width, pos_axb.height])
+
+        # LVH plot
+        axl = fig.add_subplot(gs[0,0])
+        LET_edges, LET_values = self.get_marginals(quantity="let")
+        axl.step(LET_values, LET_edges, where="post", color="black", ls="-", lw=1)
+        axl.tick_params(axis="y", direction='in', length=0)
+        axl.tick_params(axis="x", direction='in', length=0)
+        axl.set_ylabel(r"LET$_d$ [keV/μm]", labelpad=-5)
+        twin_x_ax = axl.twiny()
+        twin_x_ax.xaxis.set_ticks(axl.get_xticks())
+        twin_x_ax.set_xlim(axl.get_xlim())
+        twin_x_ax.xaxis.set_major_locator(plt.MultipleLocator(50))
+        twin_x_ax.tick_params(axis="x", direction='in', length=0)
+        axl.set_xticks([])
+        twin_x_ax.grid(color="grey", linestyle="-", linewidth=1.5, alpha=0.15)
+        axl.grid(alpha=0.5, linestyle='-')
+
+        # Lines projection
+        DVH_interp = interp1d(
+            dose_edges,
+            dose_values,
+            bounds_error=False,
+            fill_value=(dose_values[0], dose_values[-1]),
+        )
+        LVH_interp = interp1d(
+            LET_edges,
+            LET_values,
+            bounds_error=False,
+            fill_value="extrapolate",
+        )
+
+        project_contours_to_DVH(fig, axr, axb, CS,isovolumes_colors=isovolumes_colors, DVH_interp=DVH_interp, ls="-")
+        project_contours_to_LVH(fig, axr, axl, CS, isovolumes_colors=isovolumes_colors, LVH_interp=LVH_interp, ls="-")
+
+        fig.align_labels()
+
+        return axr, axb, axl
 
 class DLVH:
     """

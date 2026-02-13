@@ -8,6 +8,7 @@ These are not part of the public API and may change without notice.
 from __future__ import annotations
 
 import numpy as np
+from matplotlib.lines import Line2D
 from typing import Optional, Tuple, Iterable, Literal
 
 
@@ -200,3 +201,81 @@ def _get_bin_centers(*, edges: np.ndarray) -> np.ndarray:
     centers = (edges[:-1] + edges[1:]) / 2
 
     return centers
+
+
+def project_contours_to_DVH(fig, axr, axb, CS, isovolumes_colors, ls, DVH_interp, y_max=120):
+    for path, color in zip(CS.get_paths(), isovolumes_colors):
+        dose = path.vertices[:, 0]
+        d = dose.max()
+        y_stop = float(DVH_interp(d))
+
+        axb.vlines(
+            d,
+            ymin=y_stop,
+            ymax=y_max,
+            color=color,
+            lw=1.5,
+            linestyle=ls,
+            alpha=1,
+            zorder=5,
+        )
+
+        axb.plot(d, y_stop, "x", color=color, markersize=5)
+
+        _connect_axes(fig,
+                      axr,  d, 0,     # DLVH point
+                      axb, d, 110,   # DVH intersection
+                      color=color, lw=1.5, ls=ls)
+
+def project_contours_to_LVH(fig, axr, axl, CS, isovolumes_colors, ls, LVH_interp, x_min=-100):
+
+    for path, color in zip(CS.get_paths(), isovolumes_colors):
+        let = path.vertices[:, 1]
+        l=let.max()
+        x_stop = float(LVH_interp(l))
+
+        axl.hlines(
+            l,
+            xmin=x_min,
+            xmax=x_stop,
+            color=color,
+            linestyle=ls,
+            lw=1.5,
+            alpha=1,
+            zorder=5,
+        )
+
+        axl.plot(x_stop, l, "x", color=color, markersize=5)
+        
+        _connect_axes(fig,
+                      axr,  0, l,   # DLVH point
+                      axl, -5, l,   # LVH intersection
+                      color=color, lw=1.5, ls=ls)
+
+def _data_to_fig(fig, ax, x, y):
+    display = ax.transData.transform((x, y))
+    return fig.transFigure.inverted().transform(display)
+
+def _connect_axes(
+    fig,
+    ax_from, x_from, y_from,
+    ax_to,   x_to,   y_to,
+    color="black",
+    lw=1,
+    ls="solid",
+):
+    x0, y0 = _data_to_fig(fig, ax_from, x_from, y_from)
+    x1, y1 = _data_to_fig(fig, ax_to,   x_to,   y_to)
+
+    line = Line2D(
+        [x0, x1],
+        [y0, y1],
+        transform=fig.transFigure,
+        color=color,
+        lw=lw,
+        ls=ls,
+        alpha=1,
+        zorder=10,
+    )
+    fig.add_artist(line)
+
