@@ -67,17 +67,10 @@ def _auto_bins(*, array: np.ndarray, max_bins: int = 200) -> np.ndarray:
     """
     Suggest optimal bin edges for a 1D histogram.
 
-    Parameters
-    ----------
-    arr : np.ndarray
-        Input array to compute bin edges for.
-    max_bins : int, default=200
-        Maximum number of bins.
-
     Returns
     -------
-    bins : np.ndarray
-        Bin edges for arr.
+    edges : np.ndarray
+        Bin edges covering the data range.
     """
     return _freedman_diaconis_bins(data=array, max_bins=max_bins)
 

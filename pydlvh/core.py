@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import warnings
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
 from matplotlib.colors import ListedColormap
@@ -38,42 +39,67 @@ class Histogram1D:
         self.aggregatedby = aggregatedby
 
     def _get_data(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Return x-axis coordinates and histogram values."""
+        """
+        Return (edges, values) suitable for ax.step(where="post").
+
+        Convention:
+        - step expects len(values) == len(edges)
+        - cumulative histograms are typically stored already with a trailing 0 bin
+        - differential histograms are stored with len(values) == len(edges)-1 (np.histogram)
+          -> we append a trailing 0 for step visualization.
+        """
         edges = self.edges.copy()
         values = self.values.copy()
 
-        # Padding
-        if edges[0] > 0 and self.cumulative:
+        # Optional visual padding: ensure x starts at 0 for cumulative curves
+        if self.cumulative and edges.size > 0 and edges[0] > 0:
             edges = np.insert(edges, 0, 0.0)
+            # keep same length convention by duplicating first value
             values = np.insert(values, 0, values[0])
 
-        if not self.cumulative: # For differential DVH, set the last value to zero for visualization purposes
-            values = np.insert(values, 0, values[0])
+        # Ensure step-compatible shapes
+        if values.size == edges.size - 1:
+            # common differential case
+            values = np.append(values, 0.0)
+        elif values.size != edges.size:
+            warnings.warn(
+                f"Histogram1D shape mismatch for step plotting: "
+                f"len(edges)={edges.size}, len(values)={values.size}. "
+                f"Proceeding without shape correction.",
+                RuntimeWarning,
+            )
 
         return edges, values
     
-    def _get_error(self, *, error: np.ndarray,
-                   values: np.ndarray) -> Optional[np.ndarray]:
+    def _get_error(self, *, error: Optional[np.ndarray], values: np.ndarray) -> Optional[np.ndarray]:
+        """
+        Return error array aligned to 'values' for step plotting.
+        Accepts:
+        - same shape as values
+        - one element shorter (missing trailing 0) -> append 0
+        Otherwise returns None with a warning.
+        """
         if error is None:
             return None
-        
-        error = np.asarray(error, dtype=float)
 
-        if error.shape == values.shape:
-            return error
-        
-        return np.append(error, 0.0)
+        err = np.asarray(error, dtype=float)
+
+        if err.shape == values.shape:
+            return err
+
+        if err.size == values.size - 1:
+            return np.append(err, 0.0)
+
+        warnings.warn(
+            f"Histogram1D error band shape mismatch: "
+            f"len(values)={values.size}, len(error)={err.size}. Skipping band.",
+            RuntimeWarning,
+        )
+        return None
 
     def plot(self, *, ax: Optional[plt.Axes] = None,
              show_band: bool = True, band_color: str = None, **kwargs):
-        """
-        Plot the histogram (cumulative curve or differential bar chart).
-    
-        Parameters
-        ----------
-        show_band : bool, default=True
-            If True, draw shaded uncertainty/percentile bands if available.
-        """
+
         if ax is None:
             _, ax = plt.subplots()
     
@@ -146,6 +172,7 @@ class Histogram2D:
                  p_lo: Optional[np.ndarray] = None,
                  p_hi: Optional[np.ndarray] = None,
                  stat: Optional[str] = None):
+        
         self.values = np.asarray(values, dtype=float)
         self.dose_edges = np.asarray(dose_edges, dtype=float)
         self.let_edges = np.asarray(let_edges, dtype=float)
@@ -161,6 +188,44 @@ class Histogram2D:
         self.stat = stat if stat else None
         self.aggregated = False if stat else True # Aggregation is deduced from stat declaration
    
+    def _select_base(self, mode: Literal["values", "err", "p_lo", "p_hi"]) -> np.ndarray:
+        if mode == "values":
+            return self.values
+        if mode == "err":
+            if self.err is None:
+                raise ValueError("No data available for mode='err'.")
+            return self.err
+        if mode == "p_lo":
+            if self.p_lo is None:
+                raise ValueError("No data available for mode='p_lo'.")
+            return self.p_lo
+        if mode == "p_hi":
+            if self.p_hi is None:
+                raise ValueError("No data available for mode='p_hi'.")
+            return self.p_hi
+        raise ValueError(f"Unsupported mode='{mode}'.")
+
+    def _get_plot_data_and_edges(
+        self, *, mode: Literal["values", "err", "p_lo", "p_hi"]
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Return (data_T, dose_edges_plot, let_edges_plot) without mutating self.
+        Adds visual 0-padding for cumulative maps by duplicating the first row/col.
+        """
+        dose_edges = self.dose_edges.copy()
+        let_edges = self.let_edges.copy()
+        values = self._select_base(mode).copy()
+
+        if self.cumulative:
+            if dose_edges.size > 0 and dose_edges[0] > 0:
+                dose_edges = np.insert(dose_edges, 0, 0.0)
+                values = np.insert(values, 0, values[0, :], axis=0)
+            if let_edges.size > 0 and let_edges[0] > 0:
+                let_edges = np.insert(let_edges, 0, 0.0)
+                values = np.insert(values, 0, values[:, 0], axis=1)
+
+        return values.T, dose_edges, let_edges
+
     def plot(self, *, ax: Optional[plt.Axes] = None,
              cmap: str = None, colorbar: bool = True,
              mode: Literal["values", "err", "p_lo", "p_hi"] = "values",
@@ -168,54 +233,8 @@ class Histogram2D:
              isovolumes_colors: Optional[Union[str, List[str]]] = None,
              interactive: bool = False, title: bool = False,
              auc_map: bool = False, **kwargs):
-        """
-        Plot the 2D histogram or auxiliary maps, with optional (interactive) isovolumes.
-        Matching the viewer.plot2D layout and slider behavior.
 
-        Parameters
-        ----------
-        mode : {"values", "err", "p_lo", "p_hi"}, default="values"
-            Which map to display: central values, std, or percentile bands.
-        isovolumes : list of float, optional
-            Contour levels in percent [%] of total volume.
-            - If self.normalize=True: values are already %.
-            - If self.normalize=False: values are interpreted as % and converted to cm³.
-        isovolumes_colors : str or list of str, optional
-            Color(s) for the isovolume contours. If not a list, the color is applied to all contours.
-        interactive : bool, default=False
-            If True, show an interactive slider to add a single isovolume contour.
-        """
-
-        # Ensure visual padding to 0 for cumulative maps 
-        if self.cumulative:
-            if self.dose_edges[0] > 0:
-                self.dose_edges = np.insert(self.dose_edges, 0, 0.0)
-                self.values = np.insert(self.values, 0, self.values[0, :], axis=0)
-                if self.err is not None:
-                    self.err = np.insert(self.err, 0, self.err[0, :], axis=0)
-                if self.p_lo is not None and self.p_hi is not None:
-                    self.p_lo = np.insert(self.p_lo, 0, self.p_lo[0, :], axis=0)
-                    self.p_hi = np.insert(self.p_hi, 0, self.p_hi[0, :], axis=0)
-            if self.let_edges[0] > 0:
-                self.let_edges = np.insert(self.let_edges, 0, 0.0)
-                self.values = np.insert(self.values, 0, self.values[:, 0], axis=1)
-                if self.err is not None:
-                    self.err = np.insert(self.err, 0, self.err[:, 0], axis=1)
-                if self.p_lo is not None and self.p_hi is not None:
-                    self.p_lo = np.insert(self.p_lo, 0, self.p_lo[:, 0], axis=1)
-                    self.p_hi = np.insert(self.p_hi, 0, self.p_hi[:, 0], axis=1)
-
-        # Select data to plot 
-        if mode == "values":
-            data = self.values.T
-        elif mode == "err" and self.err is not None:
-            data = self.err.T
-        elif mode == "p_lo" and self.p_lo is not None:
-            data = self.p_lo.T
-        elif mode == "p_hi" and self.p_hi is not None:
-            data = self.p_hi.T
-        else:
-            raise ValueError(f"No data available for mode='{mode}'.")
+        data, dose_edges_plot, let_edges_plot = self._get_plot_data_and_edges(mode=mode)
 
         # Define custom colormap if not provided
         if not cmap:
@@ -231,11 +250,7 @@ class Histogram2D:
             fig = ax.figure
         fig.subplots_adjust(bottom=0.6 if interactive else 0.12)
 
-        mesh = ax.pcolormesh(self.dose_edges,
-                             self.let_edges,
-                             data,
-                             cmap=cmap,
-                             **kwargs)
+        mesh = ax.pcolormesh(dose_edges_plot, let_edges_plot, data, cmap=cmap, **kwargs)
         ax.set_xlabel(self.dose_label)
         ax.set_ylabel(self.let_label)
         if title: ax.set_title("Cumulative Dose–LET Volume Histogram (DLVH)")
@@ -266,12 +281,14 @@ class Histogram2D:
                 levels_abs = list(isovolumes)  # already in %
             else:
                 levels_abs = [p / 100.0 * total_abs for p in isovolumes]
-            CS = ax.contour(self.dose_edges[:-1],
-                            self.let_edges[:-1],
-                            data,
-                            levels=levels_abs,
-                            colors=isovolumes_colors if isovolumes_colors else "black",
-                            linewidths=1)
+            CS = ax.contour(
+                dose_edges_plot[:-1],
+                let_edges_plot[:-1],
+                data,
+                levels=levels_abs,
+                colors=isovolumes_colors if isovolumes_colors else "black",
+                linewidths=1,
+        )
             fmt = (lambda v: f"{v:g}%") if self.normalize else (lambda v: f"{v:.2f}cm³")
             ax.clabel(CS, inline=True, fontsize=10, fmt=fmt)
 
@@ -284,6 +301,8 @@ class Histogram2D:
             self._total_abs = total_abs
             self._interactive_contour = None
             self._interactive_labels = []
+            self._dose_edges_plot = dose_edges_plot
+            self._let_edges_plot = let_edges_plot
 
             ax_slider = plt.axes([0.15, 0.00001, 0.7, 0.04])
             self._slider = Slider(ax_slider,
@@ -293,7 +312,7 @@ class Histogram2D:
                                   valinit=0,
                                   valstep=1)
 
-            def _update(val):
+            def _update(_):
                 # clear previous contour
                 if self._interactive_contour is not None:
                     self._interactive_contour.remove()
@@ -316,8 +335,8 @@ class Histogram2D:
                     level_abs = level_pct / 100.0 * self._total_abs
 
                 self._interactive_contour = self._ax2d.contour(
-                    self.dose_edges[:-1],
-                    self.let_edges[:-1],
+                    self._dose_edges_plot[:-1],
+                    self._let_edges_plot[:-1],
                     self._data2d,
                     levels=[level_abs],
                     colors="darkred",
@@ -350,8 +369,11 @@ class Histogram2D:
         else:
             raise ValueError("Argument 'quantity' must be either 'dose' or 'let'.")
 
-        # Append 0.0 at the end for proper step plotting
-        values = np.append(values, 0.0)
+        # Step plotting convention
+        if values.size == edges.size - 1:
+            values = np.append(values, 0.0)
+        elif values.size != edges.size:
+            values = np.append(values, 0.0)
 
         return edges, values
 
