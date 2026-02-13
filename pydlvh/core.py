@@ -647,6 +647,8 @@ class DLVH:
         # dose edges
         if dose_edges is not None:
             d_edges = np.asarray(dose_edges, dtype=float)
+            if np.max(d_edges) < np.max(self.dose):
+                raise ValueError("Provided dose_edges do not cover the maximum dose value.")
         elif bin_width_dose is None:
             d_edges = _auto_bins(array=self.dose)
         else:
@@ -657,6 +659,8 @@ class DLVH:
         # let edges
         if let_edges is not None:
             l_edges = np.asarray(let_edges, dtype=float)
+            if np.max(l_edges) < np.max(self.let):
+                raise ValueError("Provided l_edges do not cover the maximum dose value.")
         elif bin_width_let is None:
             l_edges = _auto_bins(array=self.let)
         else:
